@@ -13,12 +13,13 @@ Saiba mais sobre Cloud Formation: https://aws.amazon.com/pt/cloudformation/
 ## Como esse repositório está estruturado?
 
 Cada template está dentro de uma pasta representando o serviço e seu contexto. Por exemplo
-    - templates
-        - codepipeline
-            - codepipeline-for-lambdas
-                - arquivo.yaml
-                - arquivo-parametros.json (opcional)
-                - arquivo.sh (opcional)
+
+- templates
+   - codepipeline
+     * codepipeline-for-lambdas
+       - arquivo.yaml
+       - arquivo-parametros.json (opcional)
+       - arquivo.sh (opcional)
 
 Arquivos de parâmetros e scripts para executar via CLI o deploy do template são opcionais
 ## Como contribuir?

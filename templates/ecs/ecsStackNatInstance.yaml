@@ -1,0 +1,335 @@
+# Criação de um Cluster ECS com duas subnets privadas 
+# Criação de um NAT Instance em subnet pública para conexão com a internet
+# Criação de Auto Scaling group para aumentar / diminuir tamanho do Cluster quando necessário
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  DesiredCapacity:
+    Type: Number
+    Default: '2'
+    Description: Number of instances to launch in your ECS cluster.
+  MaxSize:
+    Type: Number
+    Default: '6'
+    Description: Maximum number of instances that can be launched in your ECS cluster.
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues: [t2.micro, t2.small, t2.medium, t2.large, t2.xlarge, t3.micro, t3.small,
+      t3.medium, t3.large, t3.xlarge, m4.large, m4.xlarge, m5.large, m5.xlarge, c4.large,
+      c4.xlarge, c5.large, c5.xlarge, r4.large, r4.xlarge, r5.large, r5.xlarge, i3.large,
+      i3.xlarge]
+    ConstraintDescription: Please choose a valid instance type.
+  ECSAMI:
+    Description: AMI ID
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux/recommended/image_id
+  PrivateOneCIDR:
+    Type: String
+    Description: CIDR of first private subnet
+  PrivateTwoCIDR:
+    Type: String
+    Description: CIDR of second private subnet
+  Stage:
+    Type: String
+    Description: Environment stage
+  VpcId:
+    Type: String
+    Description: Id of VPC
+  PublicSubnetId:
+    Type: String
+    Description: Public Subnet Id
+  PublicEcsSecurityGroup:
+    Type: String
+    Description: Public Security Group
+Resources:
+  #Private Subnets
+  PrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref PrivateOneCIDR
+
+  PrivateSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref PrivateTwoCIDR
+
+  #NAT Instance Configuration
+  NATInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: NAT Security Group
+      VpcId: !Ref VpcId
+
+  NatHttpInboundRuleOne:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'NATInstanceSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: !Ref PrivateOneCIDR
+  NatRdsInboundRuleOne:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'NATInstanceSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '3306'
+      ToPort: '3306'
+      CidrIp: !Ref PrivateOneCIDR
+  NatRdsInboundRuleTwo:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'NATInstanceSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '3306'
+      ToPort: '3306'
+      CidrIp: !Ref PrivateTwoCIDR
+  NatHttpInboundRuleTwo:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'NATInstanceSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: !Ref PrivateTwoCIDR
+  NatHttpsInboundRuleOne:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'NATInstanceSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '443'
+      ToPort: '443'
+      CidrIp: !Ref PrivateOneCIDR
+  NatOutboundRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref 'NATInstanceSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '0'
+      ToPort: '65535'
+      CidrIp: '0.0.0.0/0'
+  NatInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-03c91470bf330c786  #Nat AMI ID
+      InstanceType: t2.micro
+      KeyName: nat-key-pair #MUST BE CREATED BEFORE in Key Pair Management
+      SourceDestCheck: false
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet: 
+            - !Ref "NATInstanceSecurityGroup"
+          SubnetId: !Ref PublicSubnetId
+
+#Route Tables
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref 'PrivateRouteTable'
+      DestinationCidrBlock: '0.0.0.0/0'
+      InstanceId: !Ref 'NatInstance'
+  PrivateSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetOne
+      RouteTableId: !Ref PrivateRouteTable
+  PrivateSubnetTwoRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetTwo
+      RouteTableId: !Ref PrivateRouteTable
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${Stage}-Cluster
+
+  CloudwatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['-', [ECSLogGroup, !Ref 'AWS::StackName']]
+      RetentionInDays: 14
+
+  #Private Security Groups
+  PrivateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Private Security Group
+      VpcId: !Ref VpcId
+
+  PrivateSecurityGroupBasicRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'PrivateSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '0'
+      ToPort: '65535'
+      SourceSecurityGroupId: !Ref 'PrivateSecurityGroup'
+  PrivateSecurityGroupPublicSubnetRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'PrivateSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '0'
+      ToPort: '65535'
+      SourceSecurityGroupId: !Ref 'PublicEcsSecurityGroup'
+  PrivateAutoScalingGroup:
+    DependsOn: NatInstance
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetOne
+        #- !Ref PrivateSubnetTwo
+      LaunchConfigurationName: !Ref 'ContainerInstancesPrivateAutoScaling'
+      MinSize: '2'
+      MaxSize: !Ref 'MaxSize'
+      DesiredCapacity: !Ref 'DesiredCapacity'
+
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingReplacingUpdate:
+        WillReplace: 'true'
+  PrivateAutoScalingUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref PrivateAutoScalingGroup
+      Cooldown: 120
+      ScalingAdjustment: 1
+  PrivateAutoScalingInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref PrivateAutoScalingGroup
+      Cooldown: 120
+      ScalingAdjustment: -1
+  ContainerInstancesPrivateAutoScaling:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref ECSAMI
+      SecurityGroups: [!Ref 'PrivateSecurityGroup']
+      InstanceType: !Ref 'InstanceType'
+      IamInstanceProfile: !Ref 'EC2InstanceProfile'
+      KeyName: pvt-subnet
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config
+          yum install -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource PrivateAutoScalingGroup --region ${AWS::Region}
+  CPUAlarmHighPrivateScaling:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Scale-up if CPU > 85% for 5 minutes"
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 85
+      AlarmActions:
+        - !Ref PrivateAutoScalingUpPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref PrivateAutoScalingGroup
+      ComparisonOperator: GreaterThanThreshold
+  CPUAlarmLowPrivateScaling:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Scale-in if CPU < 65% for 5 minutes"
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 60
+      AlarmActions:
+        - !Ref PrivateAutoScalingInPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref PrivateAutoScalingGroup
+      ComparisonOperator: LessThanThreshold
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ec2.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: ecs-service
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - 'ecs:CreateCluster'
+              - 'ecs:DeregisterContainerInstance'
+              - 'ecs:DiscoverPollEndpoint'
+              - 'ecs:Poll'
+              - 'ecs:RegisterContainerInstance'
+              - 'ecs:StartTelemetrySession'
+              - 'ecs:Submit*'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+              - 'ecr:GetAuthorizationToken'
+              - 'ecr:BatchGetImage'
+              - 'ecr:GetDownloadUrlForLayer'
+              - 's3:*'
+              - 'secretsmanager:*'
+              - 'kms:*'
+              - 'SNS:*'
+              - 'ses:*'
+              - 'sqs:*'
+              - 'cognito-idp:*'
+              - 'ssm:*'
+            Resource: '*'
+
+  AutoscalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [application-autoscaling.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: service-autoscaling
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - 'application-autoscaling:*'
+              - 'cloudwatch:DescribeAlarms'
+              - 'cloudwatch:PutMetricAlarm'
+              - 'ecs:DescribeServices'
+              - 'ecs:UpdateService'
+            Resource: '*'
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref 'EC2Role']

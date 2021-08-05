@@ -1,0 +1,35 @@
+# Cria uma fila SQS com DLQ
+# Exporta o Arn da SQS
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS SQS Example'
+Parameters:
+  Stage:
+    Type: String
+
+Resources:
+
+  ExampleDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${Stage}-example-dlq"
+      DelaySeconds: 0
+      VisibilityTimeout: 900
+      ReceiveMessageWaitTimeSeconds: 20
+
+  ExampleSqs:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${Stage}-example-sqs"
+      DelaySeconds: 0
+      VisibilityTimeout: 900
+      ReceiveMessageWaitTimeSeconds: 20
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ExampleDlq.Arn
+        maxReceiveCount: 2
+
+Outputs:
+  Example Sqs export:
+    Description: "Example Sqs Export "
+    Value: !GetAtt ExampleSqs.Arn
+    Export:
+      Name: !Sub ${Stage}-example-sqs

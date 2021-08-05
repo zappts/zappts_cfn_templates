@@ -1,0 +1,400 @@
+# Given Branch Name, Repository Name
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Code Pipeline template'
+Parameters:
+  BranchName:
+    Type: String
+  RepositoryName:
+    Type: String
+  Stage:
+    Type: String
+  StackName:
+    Type: String
+  DeploymentRegion:
+    Type: String
+  ParameterOverrides:
+    Type: String
+  HasTS:
+    Type: String
+    Default: "false"
+
+
+Conditions:  
+  HasTSCondition: !Equals [!Ref HasTS, "true"]  
+
+Resources:
+  CfnDeployBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${Stage}-project-deploy-bucket'
+
+  BuildS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${Stage}-project-artifact-bucket'
+
+  AmazonCloudWatchEventRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${Stage}-policy-start-pipeline-execution
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'codepipeline:StartPipelineExecution'
+                Resource: !Join 
+                  - ''
+                  - - 'arn:aws:codepipeline:'
+                    - !Ref 'AWS::Region'
+                    - ':'
+                    - !Ref 'AWS::AccountId'
+                    - ':'
+                    - !Ref CodePipeline
+  AmazonCloudWatchEventRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Name: !Sub ${Stage}-${RepositoryName}-CCrule
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Join 
+            - ''
+            - - 'arn:aws:codecommit:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':'
+              - !Ref RepositoryName
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - !Ref BranchName
+      Targets:
+        - Arn: !Join 
+            - ''
+            - - 'arn:aws:codepipeline:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':'
+              - !Ref CodePipeline
+          RoleArn: !GetAtt 
+            - AmazonCloudWatchEventRole
+            - Arn
+          Id: codepipeline-CodePipeline
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${Stage}-${RepositoryName}-pipeline
+      RestartExecutionOnUpdate: true
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStores:
+        - Region: !DeploymentRegion
+          ArtifactStore:
+            Location: !Ref BuildS3Bucket
+            Type: S3
+      Tags: 
+        - Key: Environment
+          Value: !Ref Stage
+        - Key: Service
+          Value: CodePipeline
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                BranchName: !Ref BranchName
+                RepositoryName: !Ref RepositoryName
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: Build
+          Actions:
+          - Name: Build
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: 1
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: !Ref BuildProject
+            RunOrder: 2
+            InputArtifacts:
+              - Name: SourceOutput
+            OutputArtifacts:
+              - Name: BuildOutput
+        - Name: Stage
+          Actions:
+            - Name: Stage
+              Region: !Ref DeploymentRegion
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: 1
+              InputArtifacts:
+                - Name: BuildOutput 
+              Configuration:
+                ActionMode: CHANGE_SET_REPLACE
+                RoleArn: !GetAtt CloudformationRole.Arn
+                StackName: !Sub ${StackName}
+                ChangeSetName: !Sub '${AWS::StackName}ChangetSet'
+                Capabilities: CAPABILITY_NAMED_IAM
+                TemplatePath: BuildOutput::templates/outputSamTemplate.yaml
+                ParameterOverrides: !Ref ParameterOverrides
+              RunOrder: 3
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              Region: !Ref DeploymentRegion
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: 1
+              InputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ActionMode: CHANGE_SET_EXECUTE
+                RoleArn: !GetAtt CloudformationRole.Arn
+                StackName: !Sub ${StackName}-${Tenant}
+                ChangeSetName: !Sub '${AWS::StackName}ChangetSet'
+                Capabilities: CAPABILITY_NAMED_IAM
+                TemplatePath: BuildOutput::outputSamTemplate.yaml
+              RunOrder: 4
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: ''
+          Effect: Allow
+          Principal:
+            Service:
+            - codepipeline.amazonaws.com
+            - codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: CodePipelinePolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - s3:GetObject
+            - s3:GetObjectVersion
+            - s3:GetBucketVersioning
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - s3:PutObject
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - codecommit:*
+            - codebuild:*
+            - cognito-idp:*
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - autoscaling:*
+            - cloudwatch:*
+            - s3:*
+            - sns:*
+            - cloudformation:*
+            - sqs:*
+            - iam:PassRole
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - lambda:InvokeFunction
+            - lambda:ListFunctions
+            Resource: "*"
+            Effect: Allow
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${Stage}-${RepositoryName}
+      Description: !Sub 'CodeBuild for project: ${RepositoryName}-${Stage}'
+      ServiceRole: !GetAtt BuildProjectRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: linuxContainer
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        EnvironmentVariables:
+          - Name: STAGE
+            Value: Stage
+          - Name: CFN_BUCKET
+            Value: !Ref CfnDeployBucket
+          - Name: BUILD_COMMAND
+            Value: !If 
+                    - HasTSCondition
+                    - 'yarn compile:server'
+                    - 'echo build not configurated'
+      Tags: 
+        - Key: Environment
+          Value: !Ref Stage
+        - Key: Service
+          Value: CodeBuildProject
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - apt-get update
+                - npm i yarn -g
+                - yarn install --ignore-engines --production=true
+                - find ./node_modules -mtime +10950 -exec touch {} +
+                - rm -rf ./docs
+            build:
+              commands:
+                - ${BUILD_COMMAND}
+                - aws cloudformation package
+                  --template-file templates/samTemplate.yaml
+                  --s3-bucket ${CFN_BUCKET}
+                  --output-template-file templates/outputSamTemplate.yaml
+          artifacts:
+            type: zip
+            files:
+              - '**/*'
+      TimeoutInMinutes: 10
+
+  BuildProjectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Stage}-${RepositoryName}-CodeBuildRole
+      Policies:
+        - PolicyName: CloudFormationRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - 'ec2:*'
+                  - 's3:*'
+                  - 'codecommit:*'
+                  - 'codepipeline:*'
+                  - 'codebuild:*'
+                  - 'iam:*'
+                  - 'elasticloadbalancing:*'
+                  - 'logs:*'
+                  - 'ecs:*'
+                  - 'cognito-idp:*'
+                  - 'ecr:*'
+                  - 'apigateway:*'
+                  - 'ssm:*'
+                Effect: Allow
+                Resource: '*'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+  BuildProjectPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${Stage}-${RepositoryName}-CodeBuildPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetBucketPolicy
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:ListObjects
+              - ssm:*
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+          - Effect: Allow
+            Action:
+              - cloudformation:ValidateTemplate
+              - ec2:*
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - codecommit:*
+              - codebuild:*
+            Resource: '*'
+      Roles:
+        -
+          !Ref BuildProjectRole
+  CloudformationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [cloudformation.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyName: CloudFormationRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - 'ec2:*'
+                  - 's3:*'
+                  - 'codecommit:*'
+                  - 'codepipeline:*'
+                  - 'codebuild:*'
+                  - 'codedeploy:*'
+                  - 'apigateway:*'
+                  - 'iam:*'
+                  - 'cloudformation:*'
+                  - 'lambda:*'
+                  - 'sqs:*'
+                  - 'dynamodb:*'
+                  - 'cognito-idp:*'
+                  - 'events:*'
+                  - 'sns:*'
+                  - 'sqs:*'
+                  - 'ssm:*'
+                  - 'glue:*'
+                  - 'logs:*'
+                  - 'cloudwatch:*'
+                Effect: Allow
+                Resource: '*'

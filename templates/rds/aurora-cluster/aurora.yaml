@@ -1,0 +1,96 @@
+# Cria um cluster do aurora com uma instancia
+# Cria um secrets manager para armazenar o usuario da aplicação
+
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Aurora Cluster Example
+
+Parameters:
+  Stage:
+    Type: String
+    Description: Environment
+  HasVPC:
+    Type: String
+    Default: "false"
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Default: "subnet-12345"
+  SecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Default: "sg-12345"
+  Region:
+    Type: String
+    Default: us-east-2
+  SubnetGroupDBName:
+    Type: String
+  MasterUsername:
+    Type: String
+  MasterPassword:
+    Type: String
+    NoEcho: true
+
+Conditions:
+  HasVPCCondition: !Equals [!Ref HasVPC, "true"]
+  IsProdCondition: !Equals [!Ref Stage, "prod"]
+  IsDevCondition: !Equals [!Ref Stage, "dev"]
+
+  IsDevOrProdCondition: !Or 
+    - !Condition IsProdCondition
+    - !Condition IsDevCondition
+
+
+Resources:
+#Aurora DB Cluster
+  AuroraDBCluster:
+    Type: AWS::RDS::DBCluster
+    Condition: IsDevOrProdCondition
+    Properties:
+      BackupRetentionPeriod: !If [IsProdCondition, 7, 1]
+      DatabaseName: !Sub ${Stage}_db_name
+      DBClusterIdentifier: !Sub ${Stage}-cluster
+      DBSubnetGroupName: !If [HasVPCCondition, !Ref SubnetGroupDBName, !Ref AWS::NoValue]
+      DeletionProtection: true
+      EnableCloudwatchLogsExports: 
+        - audit
+      Engine: aurora-mysql
+      EngineMode: provisioned
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterPassword
+      VpcSecurityGroupIds:
+        - !If
+          - HasVPCCondition
+          - !Ref SecurityGroupIds
+          - !Ref AWS::NoValue
+
+
+# Aurora Writer Instance
+  AuroraWriterInstance:
+    Type: AWS::RDS::DBInstance
+    Condition: IsDevOrProdCondition
+    Properties: 
+      DBClusterIdentifier: !Ref AuroraDBCluster
+      DBInstanceClass: db.t3.small
+      DBInstanceIdentifier: !Sub dw-${Stage}-db-instance
+      DBSecurityGroups: 
+        - !If
+          - HasVPCCondition
+          - !Ref SecurityGroupIds
+          - !Ref AWS::NoValue
+      DBSubnetGroupName:  !If [HasVPCCondition, !Ref SubnetGroupDBName, !Ref AWS::NoValue]
+      EnablePerformanceInsights: !If [IsProdCondition, true, false]
+      Engine: aurora-mysql
+      PubliclyAccessible: !If [HasVPCCondition, false, true]
+
+
+#Secrets Manager - need to create user later on database to user secret and password
+  SecretsManagerApplicationUser:  
+    Type: AWS::SecretsManager::Secret
+    Condition: IsDevOrProdCondition
+    Properties: 
+      Description: Secret user and password for user application
+      Name: !Sub ${Stage}/db-application-user
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"host": "${AuroraDBCluster.Endpoint.Address}", "port": "${AuroraDBCluster.Endpoint.Port}", "username": "application-user"}'
+        GenerateStringKey: "password"
+        PasswordLength: 10
+        ExcludeCharacters: '"@/\'

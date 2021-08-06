@@ -1,0 +1,148 @@
+# Cria um API Gateway
+# Cria uma Lambda com api gateway de evento
+
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda example
+
+Parameters:
+  Stage:
+    Type: String
+
+Resources:
+  ApiExample:
+    Type: AWS::Serverless::Api
+    Properties:
+      MethodSettings:
+        -
+          MetricsEnabled: true
+          DataTraceEnabled: true
+          HttpMethod: "*"
+          ResourcePath: /*
+      Name: !Sub ${Stage}-example
+      StageName: !Ref Stage
+      Cors:
+        AllowMethods: "'DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT'"
+        AllowHeaders: "'X-Amz-Security-Token,Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+        AllowOrigin: "'*'"
+        MaxAge: "'600'"
+      Auth:
+        Authorizers:
+          LambdaAuthorizer:
+            FunctionPayloadType: TOKEN
+            FunctionArn: !GetAtt LambdaAuthorizerFunction.Arn
+            Identity:
+              Header: Authorization
+              ReauthorizeEvery: 0
+
+  GatewayResponseDefault4XX:
+    Type: 'AWS::ApiGateway::GatewayResponse'
+    Properties:
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
+      ResponseType: UNAUTHORIZED
+      RestApiId:
+        Ref: 'ApiExample'
+
+  GatewayResponseDefaultToken:
+    Type: 'AWS::ApiGateway::GatewayResponse'
+    Properties:
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'*'"
+      ResponseType: EXPIRED_TOKEN
+      RestApiId:
+        Ref: 'ApiExample'
+
+  GatewayResponseExpiredToken:
+    Type: 'AWS::ApiGateway::GatewayResponse'
+    Properties:
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
+      ResponseType: EXPIRED_TOKEN
+      RestApiId:
+        Ref: 'ApiExample'
+      StatusCode: "403"
+
+  lambdaExample:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${Stage}-example"
+      Role: !GetAtt LambdaRole.Arn
+      CodeUri: ./../
+      Handler: app/src/handler/example.example
+      Runtime: nodejs12.x
+      Timeout: 900
+      Environment:
+        Variables:
+          STAGE: !Ref Stage
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /v1/path/example
+            Method: post
+            RestApiId: !Ref ApiExample
+      Tracing: Active
+
+
+  LambdaAuthorizerExample:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${Stage}-authorize-example"
+      Role: !GetAtt LambdaRole.Arn
+      CodeUri: ./../
+      Handler: app/src/handler/example.example
+      Runtime: nodejs12.x
+      Timeout: 900
+      Environment:
+        Variables:
+          STAGE: !Ref Stage
+      Tracing: Active
+
+
+#Lambda Role
+  LambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+                - "events.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonAPIGatewayInvokeFullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: CooperDefaultLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - lambda:PublishVersion
+                  - lambda:InvokeFunction
+                  - apigateway:*
+                  - sqs:*
+                  - dynamoDB:*
+                  - cognito-idp:*
+                  - 'ssm:*'
+                  - 'cognito:*'
+                  - sns:*
+                Resource: "*"

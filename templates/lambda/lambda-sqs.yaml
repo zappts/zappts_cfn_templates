@@ -1,0 +1,27 @@
+# Lambda importando o valor de uma SQS
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Aurora Cluster Example
+
+Parameters:
+  Stage:
+    Type: String
+    Description: Environment
+
+Resources:
+  LambdaFromSqsExample:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${Stage}-example"
+      Role: !GetAtt LambdaRole.Arn
+      CodeUri: ./../
+      Handler: app/src/handler/example.example
+      Runtime: nodejs12.x
+      Timeout: 900
+      Events:
+        SqsEvent:
+          Type: SQS
+          Properties:
+            Queue:
+                  Fn::ImportValue:
+                    Fn::Sub: ${Stage}-example-sqs

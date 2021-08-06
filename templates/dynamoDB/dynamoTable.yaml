@@ -1,0 +1,42 @@
+# Create DynamoDB table with two primary keys: hash and range
+# Add a global index with attribute_index
+# Enable Dynamo Streams with Stream specification
+# Add tags
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DynamoDB Table Creation Example'
+
+Parameters:
+  Stage:
+    Type: String
+    Description: Environment which table will be created 
+Resources:
+  DischargeItemsDDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${Stage}_table_name
+      AttributeDefinitions:
+        - AttributeName: attribute_hash
+          AttributeType: N
+        - AttributeName: attribute_range
+          AttributeType: N
+        - AttributeName: attribute_index
+          AttributeType: S
+      KeySchema:
+        - AttributeName: attribute_hash
+          KeyType: HASH
+        - AttributeName: attribute_range
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: index_name
+          KeySchema:
+            - AttributeName: attribute_index
+              KeyType: HASH
+          ProjectionType: ALL 
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Environment
+          Value: !Ref Stage
+        - Key: Service
+          Value: DynamoDB

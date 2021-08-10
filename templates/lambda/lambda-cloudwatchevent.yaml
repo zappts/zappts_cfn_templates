@@ -38,7 +38,7 @@ Resources:
               - "Arn"
           Id: !Sub ${Stage}-lambda-example
 
-  PermissionForStartEventsToInvokeLambda:
+  PermissionForEventsToInvokeLambda:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Sub ${Stage}-lambda-example

@@ -1,0 +1,50 @@
+# Cria um API Gateway
+# Cria um cloud watch scheduled expression e associa a uma lambda
+
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda example
+
+Parameters:
+  Stage:
+    Type: String
+
+Resources:
+  LambdaExample:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${Stage}-${Tenant}-lambda-example"
+      Role: !GetAtt LambdaRole.Arn
+      CodeUri: ./../
+      Handler: app/src/handler/method.method
+      Runtime: nodejs12.x
+      Timeout: 900
+      Environment:
+        Variables:
+          STAGE: !Ref Stage
+
+#Alert
+  CloudWatchScheduledExpression:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Cloud Watch Rule
+      Name: !Sub ${Stage}-cloud-watch-rule
+      ScheduleExpression: cron(0 9 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn:
+            Fn::GetAtt:
+              - "LambdaExample"
+              - "Arn"
+          Id: !Sub ${Stage}-lambda-example
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Sub ${Stage}-lambda-example
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn:
+        Fn::GetAtt:
+          - "CloudWatchScheduledExpression"
+          - "Arn"

@@ -1,7 +1,7 @@
-# Create DynamoDB table with two primary keys: hash and range
-# Add a global index with attribute_index
-# Enable Dynamo Streams with Stream specification
-# Add tags
+# DynamoDB com duas chaves primárias: hash and range
+# Adicionar index global com attribute_index
+# Dynamo Streams habilitado
+# Possibilidade de adicionar tags
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'DynamoDB Table Creation Example'
 

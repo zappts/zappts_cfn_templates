@@ -1,0 +1,40 @@
+# DynamoDB com duas chaves primárias: hash and range
+# Adicionar index global com attribute_index
+# Dynamo Streams habilitado
+# Possibilidade de adicionar tags
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DynamoDB Table Creation Example'
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  Stage:
+    Type: String
+    Description: Environment which table will be created 
+
+Conditions:
+  IsProdCondition: !Equals [!Ref Stage, "prod"]
+
+Resources:
+
+  MessageDDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${Stage}_message
+      AttributeDefinitions:
+        - AttributeName: message_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: message_id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProdCondition, true, false]
+
+Outputs:
+  MessageDDBOutput:
+    Description: "Message DDB Table Stream Arn"
+    Value: !GetAtt MessageDDBTable.StreamArn
+    Export:
+      Name: !Sub ${Stage}-MessageDDBTable 
